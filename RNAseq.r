@@ -105,3 +105,61 @@ print("Generated filtered log CPM matrix.")
 saveRDS(filteredLogCpmMatrix, "filteredLogCpmMatrix.rds")
 print("Saved the filtered LogCPM matrix as an rds binary file.")
 
+################################### PCA and other plots, exclusion of outliers #############################
+
+colors <- c("red", "blue") # red/"1"s are Lesion samples, blue/"2"s are Normal
+
+# plot the raw counts per sample, color represents group (normal/lesion) to check for possible bias in coverage
+densities=rep("-1", length(samplesFromCounts))
+pdf("rawCountsPerSample.pdf")
+barplot(colSums(dgeList$counts), las=2, main="Counts per sample", cex.axis=0.8, cex.names=0.5, col=colors[group], axisnames=FALSE, space=0.6, density=densities, border = NA, xlab="Samples", ylab="Counts")
+dev.off()
+
+# plot the gene expression levels per gene based on the cpm values
+pdf("cpmPerGene.pdf")
+barplot(rowSums(dgeListCpm$counts), las=2, main="CPM per gene", axisnames=FALSE, cex.axis=0.8, ylab="CPM", xlab="Genes")
+dev.off()
+
+# dendrogram that shows hierarchical clustering analysis, reflects the distance between samples based on logCPM data.
+# transpose the filtered counnts matrix so each line describes an element on the plot and the columns are the variables
+transposedFLCPM <- t(filteredLogCpmMatrix)
+distance <- dist(transposedFLCPM)
+clusters <- hclust(distance)
+pdf("dendrogram.pdf")
+plot(clusters, labels=group)
+dev.off()
+
+## PCA and detection of outliers:
+# add the column with group information
+transposedFLCPMwGroup <- cbind(transposedFLCPM, group)
+pdf("PCA_FLCPM.pdf")
+autoplot(prcomp(transposedFLCPM), data=transposedFLCPMwGroup, colour='group')
+dev.off()
+
+# add sample labels to identify the outlier lesion sample on the bottom right and one that seems mislabels as lesion
+pdf("PCA_FLCPM_wLabels.pdf")
+autoplot(prcomp(transposedFLCPM), data=transposedFLCPMwGroup, colour='group', label=TRUE, label.size=3)
+dev.off()
+
+# remove the outlier and the suspected mislabeled sample:
+outlier <- "SRR1146078"
+mislabeled <- "SRR1146216"
+samplesToRemove <- c(outlier, mislabeled)
+# vector of the samples we want to keep
+samplesToKeep <- setdiff(samplesFromAnnots, samplesToRemove)
+
+# subset of the samples and their annotations that we want to keep
+sampleAnnotsToKeep <- as.matrix(sampleAnnots[samplesToKeep,]) 
+
+# define a new 'group' factor that does not include the 2 samples that are removed
+newGroup <- factor(c(sampleAnnotsToKeep[,1]))
+
+#generate new objects for the downstream analysis
+filteredCountsNoOutliers <- filteredCounts[,samplesToKeep]
+
+## generate a dgeList object from the new matrix, use logCPM this time and 
+filteredDgeListNoOutliers <- DGEList(counts=filteredCountsNoOutliers,group=newGroup)
+
+# cpm function from edgeR, prior.count is a starting value used to offset to prevent zero counts
+filteredLogCpmNoOuts <- cpm(filteredDgeListNoOutliers, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
+print("Removed outlier/mislabeles genes.")
