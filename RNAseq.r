@@ -10,6 +10,7 @@ library("ggfortify")
 # read the counts and sample annotation tables
 counts <- read.table("counts.txt",header=TRUE, row.names=1)
 sampleAnnots <- read.table("sample-annotation.txt",row.names=1,header=TRUE)	
+geneAnnots <- read.delim("gene-annotation.txt", header=TRUE)
 
 ################### check consistency of the input files and report problems if exist #####################
 
@@ -51,48 +52,29 @@ print("Generated CPM matrix.")
 
 ###################################### filter the cpm matrix ###########################################
 
-# this table will go through the filtration 
-lowCountsNormal <- 0
-lowCountsLesion <- 0
 numberOfSamples = ncol(counts)
 numberOfGenes <- nrow(counts)
 
-# the factor assignment is determined by alphabetical order so lesion->"1", normal->"2"
-lesionSamples <- with(dgeList, table(samples$group))[1]
-normalSamples <- with(dgeList, table(samples$group))[2]
-
-# a vector that keeps the gene IDs that were filtered out for later use
-genesRemoved <- vector()
+# for plotting of cpm per gene later
+dgeListCpm <- DGEList(counts=cpmMatrix,group=group)
   
-# run through the genes (rows, i) and the samples per gene (columns, j)
-# whenever finding a gene woth low counts, keep the gene id for later use
-# criteria for filtering out: cpm < 1 for 0.75 of the samples for each condition (normal, lesion)
-i <- 1
-while (i <= numberOfGenes) {
-	for (j in 1:numberOfSamples) {
-		temp <- (colnames(filteredCPM))[j]
-		if ((sampleAnnots[c(temp),] == "normal") & (filteredCPM[i,j] < 1))
-			lowCountsNormal = lowCountsNormal+1
-		if ((sampleAnnots[c(temp),] == "lesional") & (filteredCPM[i,j] < 1))
-			lowCountsLesion = lowCountsLesion+1
+# run through the genes (rows), keep lines where at least 0.75 of the samples had at least 1 count.
+threshold <- 0.75 * numberOfSamples
+j <- 0
+keep <- 0
+newMatrix<-0
+for (i in 1:numberOfGenes) {
+	if (sum(counts[i,] >= 1) >= threshold) {
+		j=j+1
+		keep <- c(keep,i)
 	}
-	if ((lowCountsNormal > 0.75 * normalSamples) & (lowCountsLesion > 0.75 * lesionSamples)) {
-		# this gene is lowly expressed and should be filtered out
-		genesRemoved <- c(genesRemoved, genesFromCounts[i]) 
-	}
-	# move on to the next one
-	lowCountsNormal <- 0
-	lowCountsLesion <- 0
-	i = i + 1	
 }
-
-print(paste("Got the list of low expression gene to filter out, number of genes to be excluded:", length(genesRemoved)))
+newMatrix<-counts[keep,]
+print(paste("Got the low expression genes filtered out, number of genes kept:", length(keep)))
 
 ########################## make a logCPM filtered matrix and save as a binary file #####################
 
-# subtrsct the lines corresponding to genes that have low counts to generate a filtered logCPM matrix for the next steps
-genesToKeep <- setdiff(genesFromCounts, genesRemoved)
-filteredCounts <- counts[genesToKeep,]
+filteredCounts <- newMatrix
 
 ## generate a dgeList object from the filtered matrix, use logCPM this time and 
 filteredDgeList <- DGEList(counts=filteredCounts,group=group)
@@ -160,6 +142,34 @@ filteredCountsNoOutliers <- filteredCounts[,samplesToKeep]
 ## generate a dgeList object from the new matrix, use logCPM this time and 
 filteredDgeListNoOutliers <- DGEList(counts=filteredCountsNoOutliers,group=newGroup)
 
-# cpm function from edgeR, prior.count is a starting value used to offset to prevent zero counts
+# get logCPM
 filteredLogCpmNoOuts <- cpm(filteredDgeListNoOutliers, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
 print("Removed outlier/mislabeles genes.")
+
+################################# Differential expression analysis by edgeR #####################################
+
+# Normalization is not needed for single factor analysis.
+# The dispersion is estimated before testing for differential expression, using the filtered counts. 
+# edgeR uses quantile-adjusted conditional maximum likelihood (qCML) method for experiments with a single factor.
+# The design matrix defines the variables and levels considered in the model, in this case one factor:
+design <- model.matrix(~newGroup)
+filteredDgeListNoOutliers <- estimateDisp(filteredDgeListNoOutliers, design)
+
+# exact test for the negative binomial distribution to compute exact p-values to assess differential expression
+# between the normal and lesion samples.
+# The function exactTest computes exact p-values by summing over all sums of counts that have a probability less
+# than the probability under the null hypothesis of the observed sum of counts.
+et <- exactTest(filteredDgeListNoOutliers)
+topTags(et)
+
+# modifying the row names of the differentially expressed genes table to be able to merge with the gene annotations
+tempDE <- et$table
+ENSEMBL <- rownames(tempDE)
+rownames(tempDE) <- NULL
+tempDEWithNames <- cbind(ENSEMBL, tempDE)
+annotatedDE <- merge(tempDEWithNames, geneAnnots, by="ENSEMBL")
+
+# sort the list of DEGs by ascending p-values and write to a tab-delimited text file
+sorted <- annotatedDE[order(annotatedDE$PValue),]
+write.table(sorted, "differntialExpression.txt", sep="\t")
+print("Performed differential expression analysis, see 'differentialExpression.txt'")
