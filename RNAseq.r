@@ -4,6 +4,7 @@ library("NMF")
 library("ggrepel")
 library("ggplot2")
 library("ggfortify")
+library("plyr")
 
 ########################## load the counts and sample annotation tables  ##################################
 
@@ -94,7 +95,8 @@ colors <- c("red", "blue") # red/"1"s are Lesion samples, blue/"2"s are Normal
 # plot the raw counts per sample, color represents group (normal/lesion) to check for possible bias in coverage
 densities=rep("-1", length(samplesFromCounts))
 pdf("rawCountsPerSample.pdf")
-barplot(colSums(dgeList$counts), las=2, main="Counts per sample", cex.axis=0.8, cex.names=0.5, col=colors[group], axisnames=FALSE, space=0.6, density=densities, border = NA, xlab="Samples", ylab="Counts")
+barplot(colSums(dgeList$counts), las=2, main="Counts per sample", cex.axis=0.8, cex.names=0.5, col=colors[group], axisnames=FALSE, density=densities, border = NA, xlab="Samples", ylab="Counts")
+legend("bottomright", c("Lesion", "Normal"), col=c("red", "blue"), lwd=3, bg="white")
 dev.off()
 
 # plot the gene expression levels per gene based on the cpm values
@@ -134,13 +136,13 @@ samplesToKeep <- setdiff(samplesFromAnnots, samplesToRemove)
 sampleAnnotsToKeep <- as.matrix(sampleAnnots[samplesToKeep,]) 
 
 # define a new 'group' factor that does not include the 2 samples that are removed
-newGroup <- factor(c(sampleAnnotsToKeep[,1]))
+group <- factor(c(sampleAnnotsToKeep[,1]))
 
 #generate new objects for the downstream analysis
 filteredCountsNoOutliers <- filteredCounts[,samplesToKeep]
 
 ## generate a dgeList object from the new matrix, use logCPM this time and 
-filteredDgeListNoOutliers <- DGEList(counts=filteredCountsNoOutliers,group=newGroup)
+filteredDgeListNoOutliers <- DGEList(counts=filteredCountsNoOutliers,group=group)
 
 # get logCPM
 filteredLogCpmNoOuts <- cpm(filteredDgeListNoOutliers, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
@@ -152,7 +154,7 @@ print("Removed outlier/mislabeles genes.")
 # The dispersion is estimated before testing for differential expression, using the filtered counts. 
 # edgeR uses quantile-adjusted conditional maximum likelihood (qCML) method for experiments with a single factor.
 # The design matrix defines the variables and levels considered in the model, in this case one factor:
-design <- model.matrix(~newGroup)
+design <- model.matrix(~group)
 filteredDgeListNoOutliers <- estimateDisp(filteredDgeListNoOutliers, design)
 
 # exact test for the negative binomial distribution to compute exact p-values to assess differential expression
@@ -167,9 +169,31 @@ tempDE <- et$table
 ENSEMBL <- rownames(tempDE)
 rownames(tempDE) <- NULL
 tempDEWithNames <- cbind(ENSEMBL, tempDE)
-annotatedDE <- merge(tempDEWithNames, geneAnnots, by="ENSEMBL")
+
+# that merge removes genes that do not have corresponding annotation, will use that one later
+annotatedDE_onlyAnnotated <- merge(tempDEWithNames, geneAnnots, by="ENSEMBL")
+ 
+# the following 'join' is also merging the two table but genes that don't have annotaions are 
+# included in the output with 'NA's in the annotation columns - will write this table to file.
+annotatedDE_allGenes <- join(tempDEWithNames, geneAnnots, type="left", by="ENSEMBL")
 
 # sort the list of DEGs by ascending p-values and write to a tab-delimited text file
-sorted <- annotatedDE[order(annotatedDE$PValue),]
-write.table(sorted, "differntialExpression.txt", sep="\t")
+sortedDE <- annotatedDE_allGenes[order(annotatedDE_allGenes$PValue),]
+write.table(sortedDE, "differntialExpression.txt", sep="\t")
 print("Performed differential expression analysis, see 'differentialExpression.txt'")
+
+################################## Heatmap of the top DEGs ###################################
+ 
+# add a column of absolute values of fold change to the annotated-only genes table 
+absLogFC <- abs(annotatedDE_onlyAnnotated$logFC)
+annotatedDE_onlyAnnotatedWithAbs <- cbind(annotatedDE_onlyAnnotated, absLogFC)
+# sort by p-values (ascending order) and absLogFoldChange (descending order)
+sortedAnnotatedDEGsWithAbs <- annotatedDE_onlyAnnotatedWithAbs[with(annotatedDE_onlyAnnotatedWithAbs, order(PValue, -absLogFC)),]
+
+# take the top 100 genes to plot a heatmap based on their CPM values
+top100 <- (sortedAnnotatedDEGsWithAbs$ENSEMBL)[1:100]
+matrixForHeatmap <- filteredLogCpmNoOuts[top100,]
+
+# The column annotaion for the heatmap is the grouping normal/lesion. Set the cellheight and cellwidth
+# to make the font readable
+aheatmap(matrixForHeatmap, filename="heatmap.pdf", annCol=data.frame(group), main="Log(CountsPerMillion), normal and lesion samples", cellheight=7, cellwidth=8)
