@@ -197,3 +197,30 @@ matrixForHeatmap <- filteredLogCpmNoOuts[top100,]
 # The column annotaion for the heatmap is the grouping normal/lesion. Set the cellheight and cellwidth
 # to make the font readable
 aheatmap(matrixForHeatmap, filename="heatmap.pdf", annCol=data.frame(group), main="Log(CountsPerMillion), normal and lesion samples", cellheight=7, cellwidth=8)
+
+########################################### Volcano plot ########################################
+
+# add a column of absolute values of fold change to 'all genes' table (not only the annotated ones)
+absLogFC_allGenes <- abs(annotatedDE_allGenes$logFC)
+annotatedDE_allGenesWithAbs <- cbind(annotatedDE_allGenes, absLogFC_allGenes)
+
+# define the threshold from which genes will be colored: the FC of the 100th gene in the top 100
+# The threshold could be set also for FC but then we would color genes other than the top 100
+thresholdPvalue <- sortedAnnotatedDEGsWithAbs[100,4]
+annotatedDE_allGenesWithAbs$thresholdPval <- as.factor(annotatedDE_allGenesWithAbs$PValue <= thresholdPvalue)
+
+pdf("volcano.pdf")
+ggplot(data=annotatedDE_allGenesWithAbs, aes(x=logFC, y=-log10(PValue), colour=thresholdPval)) +
+  geom_point(alpha=0.4, size=1.75) + xlim(c(-7.5, 7.5)) + ylim(c(0, 15)) +
+  xlab("log2 fold change") + ylab("-log10 p-value") + theme(legend.position="none")
+dev.off()
+ 
+########################################### additional step ########################################
+
+##### MD plot
+# This is an alternative way to view differential expression, where the logFC is shown on y axis
+# and the average counts are shown on x (average logCPM): 
+pdf("MDplot.pdf")
+plotMD(et)
+abline(h=c(-2, 2))
+dev.off()
